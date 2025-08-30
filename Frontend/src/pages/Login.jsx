@@ -21,7 +21,7 @@ const Login = () => {
 
         console.log(form);
 
-        axios.post("http://localhost:3000/api/auth/login", {
+        axios.post("https://atlas-ai-nae5.onrender.com/api/auth/login", {
             email: form.email,
             password: form.password
         },

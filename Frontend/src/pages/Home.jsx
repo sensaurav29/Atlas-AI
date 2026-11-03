@@ -57,6 +57,18 @@ const Home = () => {
       withCredentials: true,
     })
 
+    tempSocket.on("connect", () => {
+      console.log("Socket connected:", tempSocket.id);
+    });
+
+    tempSocket.on("disconnect", (reason) => {
+      console.warn("Socket disconnected:", reason);
+    });
+
+    tempSocket.on("connect_error", (error) => {
+      console.error("Socket connection error:", error.message);
+    });
+
     tempSocket.on("ai-message-response", (messagePayload) => {
       console.log("Received AI response:", messagePayload);
 
@@ -68,15 +80,28 @@ const Home = () => {
       dispatch(sendingFinished());
     });
 
+    tempSocket.on("ai-message-error", (errorPayload) => {
+      console.error("AI message failed:", errorPayload);
+      dispatch(sendingFinished());
+    });
+
     setSocket(tempSocket);
 
-  }, []);
+    return () => {
+      tempSocket.disconnect();
+    };
+  }, [dispatch]);
 
   const sendMessage = async () => {
 
     const trimmed = input.trim();
     console.log("Sending message:", trimmed);
     if (!trimmed || !activeChatId || isSending) return;
+    if (!socket?.connected) {
+      console.error("Cannot send message: socket is not connected");
+      return;
+    }
+
     dispatch(sendingStarted());
 
     const newMessages = [ ...messages, {

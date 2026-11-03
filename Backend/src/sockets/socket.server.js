@@ -36,91 +36,133 @@ const initSocketServer = (httpServer) => {
     }
   });
   io.on("connection", (socket) => {
+    console.log(`Socket connected: ${socket.id}`);
+    socket.onAny((eventName) => {
+      console.log(`[${socket.id}] Received socket event "${eventName}"`);
+    });
+
     socket.on("ai-message", async (messagePayload) => {
-      const [message, vectors] = await Promise.all([
-        messageModel.create({
-          chat: messagePayload.chatid,
-          user: socket.user._id,
-          content: messagePayload.content,
-          role: "user",
-        }),
-        aiService.generateVector(messagePayload.content),
-      ]);
+      let stage = "validating message";
+      try {
+        console.log(`[${socket.id}] Received ai-message event`);
+        if (
+          !messagePayload ||
+          typeof messagePayload.chatid !== "string" ||
+          typeof messagePayload.content !== "string" ||
+          !messagePayload.content.trim()
+        ) {
+          throw new Error("Payload must include chatid and non-empty content");
+        }
 
-      await createMemory({
-        vectors,
-        messageId: message._id,
-        metadata: {
-          chat: messagePayload.chatid,
-          userid: socket.user._id,
-          text: messagePayload.content,
-        },
-      });
-
-      const [memory, chatHistory] = await Promise.all([
-        queryMemory({
-          queryVector: vectors,
-          limit: 3,
-          metadata: {
-            user: socket.user._id,
-          },
-        }),
-        messageModel
-          .find({
+        stage = "saving user message and generating embedding";
+        console.log(`[${socket.id}] ${stage}`);
+        const [message, vectors] = await Promise.all([
+          messageModel.create({
             chat: messagePayload.chatid,
-          })
-          .limit(20)
-          .lean(),
-      ]);
+            user: socket.user._id,
+            content: messagePayload.content,
+            role: "user",
+          }),
+          aiService.generateVector(messagePayload.content),
+        ]);
 
-      const stm = chatHistory.map((item) => {
-        return {
-          role: item.role,
-          parts: [{ text: item.content }],
-        };
-      });
+        stage = "storing message memory";
+        console.log(`[${socket.id}] ${stage}`);
+        await createMemory({
+          vectors,
+          messageId: message._id,
+          metadata: {
+            chat: messagePayload.chatid,
+            userid: String(socket.user._id),
+            text: messagePayload.content,
+          },
+        });
 
-      const ltm = [
-        {
-          role: "user",
-          parts: [
-            {
-              text: `these are some of the previous chats, use them to generate the response 
+        stage = "retrieving chat context";
+        console.log(`[${socket.id}] ${stage}`);
+        const [memory, chatHistory] = await Promise.all([
+          queryMemory({
+            queryVector: vectors,
+            limit: 3,
+            metadata: {
+              userid: { $eq: String(socket.user._id) },
+            },
+          }),
+          messageModel
+            .find({
+              chat: messagePayload.chatid,
+            })
+            .limit(20)
+            .lean(),
+        ]);
+
+        const stm = chatHistory.map((item) => {
+          return {
+            role: item.role,
+            parts: [{ text: item.content }],
+          };
+        });
+
+        const ltm = [
+          {
+            role: "user",
+            parts: [
+              {
+                text: `these are some of the previous chats, use them to generate the response 
             ${memory.map((item) => item.metadata.text).join("\n")}
             `,
-            },
-          ],
-        },
-      ];
-      const response = await aiService.generateResponse([...ltm, ...stm]);
+              },
+            ],
+          },
+        ];
 
-      console.log("LTM AND STM ARE: ",ltm[0], stm);
+        stage = "generating AI response";
+        console.log(`[${socket.id}] ${stage}`);
+        const response = await aiService.generateResponse([...ltm, ...stm]);
 
-      socket.emit("ai-message-response", {
-        content: response,
-        chat: messagePayload.chatid,
-      });
-
-      const [responseMessage, responseVectors] = await Promise.all([
-        messageModel.create({
-          chat: messagePayload.chatid,
-          user: socket.user._id,
+        console.log(`[${socket.id}] AI response generated; emitting ai-message-response`);
+        socket.emit("ai-message-response", {
           content: response,
-          role: "model",
-        }),
-        aiService.generateVector(response),
-      ]);
-
-      // creating & saving vectors for bot's response in PinceCone
-      await createMemory({
-        vectors: responseVectors,
-        messageId: responseMessage._id,
-        metadata: {
           chat: messagePayload.chatid,
-          user: socket.user._id,
-          text: response,
-        },
-      });
+        });
+
+        stage = "saving AI response";
+        console.log(`[${socket.id}] ${stage}`);
+        const [responseMessage, responseVectors] = await Promise.all([
+          messageModel.create({
+            chat: messagePayload.chatid,
+            user: socket.user._id,
+            content: response,
+            role: "model",
+          }),
+          aiService.generateVector(response),
+        ]);
+
+        await createMemory({
+          vectors: responseVectors,
+          messageId: responseMessage._id,
+          metadata: {
+            chat: messagePayload.chatid,
+            userid: String(socket.user._id),
+            text: response,
+          },
+        });
+        console.log(`[${socket.id}] Message processing completed`);
+      } catch (error) {
+        console.error(
+          `[${socket.id}] Failed to process ai-message while ${stage}:`,
+          error?.stack || error
+        );
+        socket.emit("ai-message-error", {
+          chat: messagePayload?.chatid,
+          stage,
+          message: error.message || "Message processing failed",
+        });
+      }
+    });
+
+    socket.on("disconnect", (reason) => {
+      console.log(`Socket disconnected: ${socket.id} (${reason})`);
     });
   });
 };

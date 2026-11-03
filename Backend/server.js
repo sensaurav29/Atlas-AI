@@ -9,5 +9,7 @@ initSocketServer(httpServer);
 
 
 httpServer.listen(3000, () => {
+  console.log("Pinecone API key loaded:", Boolean(process.env.PINECONE_API_KEY));
+  console.log("Gemini API key loaded:", Boolean(process.env.GEMINI_API_KEY));
   console.log("Server connected on 3000");
 });

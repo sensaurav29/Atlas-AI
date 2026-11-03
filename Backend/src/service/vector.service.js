@@ -9,7 +9,7 @@ const cohortChatGptIndex = pc.Index("cohort-chat-gpt");
 async function createMemory({ vectors, metadata, messageId }) {
   await cohortChatGptIndex.upsert([
     {
-      id: messageId,
+      id: String(messageId),
       values: vectors,
       metadata,
     },
